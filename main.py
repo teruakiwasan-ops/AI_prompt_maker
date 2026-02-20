@@ -1,15 +1,14 @@
 import streamlit as st
 import pandas as pd
-from google import genai  # ここが requirements.txt の google-genai と対応します
+from google import genai
 import io
 
 # --- 1. セキュリティ設定 ---
-# APIキーはGitHubには書かず、Streamlit CloudのSecretsから読み込みます
 try:
     API_KEY = st.secrets["GEMINI_API_KEY"]
     client = genai.Client(api_key=API_KEY)
 except Exception as e:
-    st.error("【エラー】APIキーが設定されていません。StreamlitのSecretsに 'GEMINI_API_KEY' を追加してください。")
+    st.error("【設定エラー】StreamlitのSecretsに 'GEMINI_API_KEY' を登録してください。")
     st.stop()
 
 # --- 2. 画面構成 ---
@@ -17,61 +16,59 @@ st.set_page_config(page_title="AIプロンプト・デザイナー", page_icon="
 
 st.title("🪄 AI専用プロンプト・デザイナー")
 st.markdown("""
-誰もが「プロ級のAI監査」をできるようにするためのツールです。  
-ファイルをアップロードすると、**そのデータ専用の指示文（プロンプト）**をAIが執筆します。
+### 「AI監査」サポートツール
+ファイルをアップロードすると、そのデータ構造をAIが分析し、Googleスプレッドシート等のGeminiサイドバーで使える**「最強の指示文」**を生成します。
 """)
 
 # --- 3. ファイルアップロード ---
-uploaded_file = st.file_uploader("解析したいExcel、CSV、またはPDFを選択してください", type=["xlsx", "xls", "csv", "pdf"])
+uploaded_file = st.file_uploader("Excel(xlsx/xls) または CSV を選択してください", type=["xlsx", "xls", "csv"])
 
 if uploaded_file:
-    with st.spinner("AIがデータの構造を読み取っています..."):
+    with st.spinner("AIがデータの構造を解析中..."):
         data_summary = ""
         
-        # ファイル形式ごとの処理
         try:
+            # ファイル読み込み
             if uploaded_file.name.endswith(('.xlsx', '.xls')):
                 df = pd.read_excel(uploaded_file)
-                data_summary = f"Excelファイルです。列名: {df.columns.tolist()} \nデータの先頭5件: \n{df.head(5).to_csv()}"
+                data_summary = f"Excelファイル。列名: {df.columns.tolist()} \n先頭データサンプル: \n{df.head(5).to_csv()}"
             elif uploaded_file.name.endswith('.csv'):
                 df = pd.read_csv(uploaded_file, encoding='cp932')
-                data_summary = f"CSVファイルです。列名: {df.columns.tolist()} \nデータの先頭5件: \n{df.head(5).to_csv()}"
-            else:
-                data_summary = "PDFまたは非構造化ドキュメントです。内容を推測してプロンプトを作成します。"
+                data_summary = f"CSVファイル。列名: {df.columns.tolist()} \n先頭データサンプル: \n{df.head(5).to_csv()}"
 
-            # --- 4. AIによるプロンプト設計 ---
-            # ここで「AIに、AIへの指示を作らせる」メタプロンプトを実行
-            instruction = f"""
-            あなたは世界最高峰のプロンプトエンジニアです。
-            以下のデータの構造を分析し、GoogleスプレッドシートのGeminiサイドバーで
-            「ミスや不整合を100%見つける」ための最高精度の指示文（プロンプト）を執筆してください。
+            # --- 4. プロンプト生成ボタン ---
+            if st.button("このシート専用のプロンプトを生成する"):
+                # AIへのメタ指示
+                instruction = f"""
+                あなたは世界最高峰のプロンプトエンジニアです。
+                以下のデータの構造を分析し、GoogleスプレッドシートのGeminiサイドバーで
+                「入力漏れ・数値矛盾・期限切れ」を完璧に見つけるための指示文（プロンプト）を執筆してください。
 
-            【データの構造・サンプル】
-            {data_summary}
+                【解析対象データ構造】
+                {data_summary}
 
-            【プロンプト作成のルール】
-            1. スプレッドシートのGeminiにそのままコピペして使える形式にする。
-            2. 「どの列とどの列を比較して矛盾を探すべきか」を具体的に指定する。
-            3. 施設管理や事務の専門家として、厳しく、かつ具体的なアクション（業者督促など）を促す内容にする。
-            4. 冒頭は「以下のルールに従って、このシートを徹底的に監査してください」で始める。
-            """
+                【プロンプトへの要求】
+                1. 「以下のルールでこのシートを監査してください」から始めること。
+                2. 具体的にどの列（案件名、予算、実算など）に注目すべきか明記すること。
+                3. 「予算欄に計上Noが入っている可能性」や「注文済みと言いつつ日付がない」といった施設管理特有のミスを突く内容にすること。
+                4. 指示は箇条書きで分かりやすく。
+                """
 
-            response = client.models.generate_content(
-                model="gemini-2.0-flash",
-                contents=instruction
-            )
+                # モデルは安定性を重視して1.5-flashを指定
+                response = client.models.generate_content(
+                    model="gemini-1.5-flash",
+                    contents=instruction
+                )
 
-            # --- 5. 結果の表示 ---
-            st.divider()
-            st.subheader("📋 生成された専用プロンプト")
-            st.info("この文章をコピーして、Googleシート右側のGeminiパネルに貼り付けてください。")
-            
-            st.code(response.text, language="text")
-            
-            st.success("作成完了！このプロンプトは、今アップロードされたファイルに完全に最適化されています。")
+                # --- 5. 結果表示 ---
+                st.divider()
+                st.subheader("📋 生成された専用プロンプト")
+                st.info("下の枠内をコピーして、スプレッドシートの右側にあるGeminiに貼り付けてください。")
+                st.code(response.text, language="text")
+                st.success("作成完了！このプロンプトを使うと、AIがシートの不備を的確に指摘します。")
 
         except Exception as e:
             st.error(f"解析中にエラーが発生しました: {e}")
 
 st.divider()
-st.caption("© 2026 Facility Management AI Prompt Designer")
+st.caption("© 2026 Facility Management Support Tool")
