@@ -3,72 +3,87 @@ import pandas as pd
 from google import genai
 import io
 
-# --- 1. セキュリティ設定 ---
+# --- 1. APIキーの設定 (Secretsから読み込み) ---
 try:
+    # Streamlit Cloudの Settings > Secrets に登録したキーを使用
     API_KEY = st.secrets["GEMINI_API_KEY"]
     client = genai.Client(api_key=API_KEY)
 except Exception as e:
-    st.error("【設定エラー】StreamlitのSecretsに 'GEMINI_API_KEY' を登録してください。")
+    st.error("【設定エラー】StreamlitのSecretsに 'GEMINI_API_KEY' を正しく登録してください。")
     st.stop()
 
-# --- 2. 画面構成 ---
+# --- 2. アプリの基本設定 ---
 st.set_page_config(page_title="AIプロンプト・デザイナー", page_icon="🪄", layout="wide")
 
-st.title("🪄 AI専用プロンプト・デザイナー")
+st.title("🪄 AI専用プロンプト・デザイナー (1.5 Flash版)")
 st.markdown("""
-### 「AI監査」サポートツール
-ファイルをアップロードすると、そのデータ構造をAIが分析し、Googleスプレッドシート等のGeminiサイドバーで使える**「最強の指示文」**を生成します。
+### ファイルを読み込み、Geminiサイドバー用の「最強指示文」を自動作成
+20名のメンバーが誰でも精度の高い監査ができるよう、Excelの項目名から最適なプロンプトを生成します。
 """)
 
-# --- 3. ファイルアップロード ---
-uploaded_file = st.file_uploader("Excel(xlsx/xls) または CSV を選択してください", type=["xlsx", "xls", "csv"])
+# --- 3. ファイルのアップロード ---
+uploaded_file = st.file_uploader("Excel(xlsx/xls) または CSV を選択", type=["xlsx", "xls", "csv"])
 
 if uploaded_file:
-    with st.spinner("AIがデータの構造を解析中..."):
-        data_summary = ""
-        
+    with st.spinner("AIがデータの構造（項目名）を分析しています..."):
         try:
-            # ファイル読み込み
+            # ファイルの読み込み
             if uploaded_file.name.endswith(('.xlsx', '.xls')):
                 df = pd.read_excel(uploaded_file)
-                data_summary = f"Excelファイル。列名: {df.columns.tolist()} \n先頭データサンプル: \n{df.head(5).to_csv()}"
             elif uploaded_file.name.endswith('.csv'):
-                df = pd.read_csv(uploaded_file, encoding='cp932')
-                data_summary = f"CSVファイル。列名: {df.columns.tolist()} \n先頭データサンプル: \n{df.head(5).to_csv()}"
+                # 日本語の文字化け対策(cp932)
+                try:
+                    df = pd.read_csv(uploaded_file, encoding='cp932')
+                except:
+                    df = pd.read_csv(uploaded_file, encoding='utf-8')
+            
+            # 【重要】429エラー対策：データを最小限に絞る
+            # 全データを送ると制限に引っかかるため、「列名」と「最初の5行」だけに限定します
+            columns_list = df.columns.tolist()
+            sample_rows = df.head(5).to_csv(index=False)
+            
+            st.success(f"読み込み成功！ 項目数: {len(columns_list)} / データ総数: {len(df)}件")
 
-            # --- 4. プロンプト生成ボタン ---
-            if st.button("このシート専用のプロンプトを生成する"):
-                # AIへのメタ指示
-                instruction = f"""
-                あなたは世界最高峰のプロンプトエンジニアです。
-                以下のデータの構造を分析し、GoogleスプレッドシートのGeminiサイドバーで
-                「入力漏れ・数値矛盾・期限切れ」を完璧に見つけるための指示文（プロンプト）を執筆してください。
+            # --- 4. プロンプト生成実行 ---
+            if st.button("このシート専用のプロンプトを生成"):
+                # メタ・プロンプト（AIに指示を作らせるための指示）
+                system_instruction = f"""
+                あなたは高度なプロンプトエンジニアです。
+                ユーザーがアップロードした以下のデータの構造（列名）を分析し、
+                GoogleスプレッドシートのGeminiサイドバーで「ミスを見つける」ための
+                具体的で厳しい監査用プロンプト（指示文）を1つ作成してください。
 
-                【解析対象データ構造】
-                {data_summary}
+                【解析対象の項目名】
+                {columns_list}
 
-                【プロンプトへの要求】
-                1. 「以下のルールでこのシートを監査してください」から始めること。
-                2. 具体的にどの列（案件名、予算、実算など）に注目すべきか明記すること。
-                3. 「予算欄に計上Noが入っている可能性」や「注文済みと言いつつ日付がない」といった施設管理特有のミスを突く内容にすること。
-                4. 指示は箇条書きで分かりやすく。
+                【データのサンプル（5行）】
+                {sample_rows}
+
+                【プロンプト作成の条件】
+                1. 「以下のルールで、このシートのデータを厳格に監査してください」で始める。
+                2. 具体的な列名を引用すること（例：「『案件名』が注文済なのに『発注日』が空欄のものを探せ」など）。
+                3. 予算額の欄に計上Noが混じっていないか、期限が切れていないか等の視点を入れる。
+                4. 初心者がコピペしてそのまま使える形式にすること。
                 """
 
-                # モデルは安定性を重視して1.5-flashを指定
+                # 制限の緩い 1.5-flash モデルを指定
                 response = client.models.generate_content(
                     model="gemini-1.5-flash",
-                    contents=instruction
+                    contents=system_instruction
                 )
 
-                # --- 5. 結果表示 ---
+                # 結果の表示
                 st.divider()
                 st.subheader("📋 生成された専用プロンプト")
-                st.info("下の枠内をコピーして、スプレッドシートの右側にあるGeminiに貼り付けてください。")
+                st.info("この文章をコピーして、Googleシート右側のGeminiに貼り付けてください。")
+                
+                # コピーしやすいように st.code で表示
                 st.code(response.text, language="text")
-                st.success("作成完了！このプロンプトを使うと、AIがシートの不備を的確に指摘します。")
+                
+                st.success("作成が完了しました！このプロンプトは現在のファイル構造に最適化されています。")
 
         except Exception as e:
-            st.error(f"解析中にエラーが発生しました: {e}")
+            st.error(f"解析中にエラーが発生しました。ファイル形式を確認してください。: {e}")
 
 st.divider()
-st.caption("© 2026 Facility Management Support Tool")
+st.caption("© 2026 Facility Management AI Support Tool")
