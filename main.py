@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from google import genai
+from google import genai  # ここが requirements.txt の google-genai と対応します
 import io
 
 # --- 1. セキュリティ設定 ---
